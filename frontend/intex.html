@@ -11,13 +11,15 @@
     <h1>Podcast Note Taking</h1>
     <p>This is a demo version of how AI-integrated podcast note taking works.</p>
 
-    <audio controls>
+    <audio id="player" controls>
         <source src="https://traffic.megaphone.fm/SCIM9175684945.mp3?updated=1773895307", type="audio/mpeg">
     </audio>
 
     <button onclick = "takeNotes()">Take Notes</button>
+    <button onclick="fullEpisodeNotes()">Summarize Full Episode</button>
 
     <h2>Notes</h2>
     <ul id="notesList"></ul>
+
 </body>
 </html>

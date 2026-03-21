@@ -1,30 +1,41 @@
-const audio = document.querySelector('audio');
-const noteList = document.querySelector("noteList");
+const audio = document.getElementById('player');
+const noteList = document.getElementById('notesList');
 
-function takeNotes() {
-    const currentTime = audio.currentTime;
+async function takeNotes() {
+    const timestamp = audio.currentTime;
 
-    //seconds -> readable format
-    const minutes = Math.floor(currentTime / 60);
-    const seconds = Math.floor(currentTime % 60);
+    const responce = await fetch("http://localhost:8000/generate-note", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            timestamp: timestamp,
+        full_episode: false
+        })
+    });
 
-    const timestamp = "${minutes}:${seconds.toString().padStart(2, '0')}";
-
-    // not real AI response
-    const noteText = generateFakeNote();
-    
-    // note showing
-    const li = document.createElement("li");
-    li.innerText = `[${timestamp}] ${noteText}`;
-    noteList.appendChild(li);
+    const data = await responce.json();
+    displayNote(timestamp, data.notes);
 }
 
-function generateFakeNotes() {
-    const fakeNotes = [
-        "Key idea from the episode",
-        "Interesting quote from the speaker",
-        "Personal reflection on the topic",
-        "Actionable takeaway to implement"
-    ];
-    return fakeNotes[Math.floor(Math.random() * fakeNotes.length)];
+async function fullNotes() {
+    const timestamp = await fetch ("http://localhost:8000/generate-note", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            full_episode: true
+        })
+    });
+
+    const data = await responce.json();
+    displayNote("Full Episode", data.notes);
+}
+
+function showNotes(time, text){
+    const li = document.createElement("li");
+    li.innerText = `[${time}] ${text}`;
+    noteList.appendChild(li);
 }

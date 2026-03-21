@@ -4,10 +4,12 @@ html, body {
 }
 
 body {
-    background-color: lightblue;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: cover;
+  background-image: url("/assets/background.png");
+  background-size: cover;       
+  background-position: center;  
+  background-repeat: no-repeat;
+  height: 100vh;
+  margin: 0;
 }
 
 h1 {
@@ -16,7 +18,7 @@ h1 {
 }
 
 p {
-    color: white;
+    color: black;
     text-align: center;
 }
 
@@ -30,7 +32,7 @@ audio {
     margin-left: auto;
     margin-right: auto;
     margin-top: 20px;
-
+    text-align: center;
 }
 
 button {
@@ -38,4 +40,21 @@ button {
     margin-left: auto;
     margin-right: auto;
     margin-top: 20px;
+    padding: 10px;
+    cursor: pointer;
+    text-align: left;
+}
+
+button {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 20px;
+    padding: 10px;
+    cursor: pointer;
+    text-align: right;
+}
+
+li {
+    margin-bottom: 10px;
 }
