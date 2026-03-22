@@ -1,14 +1,25 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 import requests
+import certifi
 import json
-import io
+import os
+import tempfile
+import uuid
+from threading import Lock
 
 from app.db import SessionLocal
 from app import models
-from app.services import generate_notes, extract_chunk, client
+from app.services import generate_notes, extract_chunk, groq_client, transcribe_audio_local
 
 router = APIRouter()
+
+# ── In-memory transcription job tracking ────────────────────────────────────
+_jobs: dict = {}
+_jobs_lock = Lock()
+
+AUDIO_URL = "https://pdst.fm/e/pscrb.fm/rss/p/mgln.ai/e/1390/claritaspod.com/measure/p.podderapp.com/2544644999/episode.flightcast.com/01KK9Q3P2XBKGST2RRVG9QPQA4.mp3"
+
 
 def get_db():
     db = SessionLocal()
@@ -17,52 +28,94 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/transcribe")
-def transcribe_episode(db: Session = Depends(get_db)):
-    audio_url = "https://traffic.megaphone.fm/SCIM9175684945.mp3"
-    try:
-        response = requests.get(audio_url)
-        response.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download audio: {str(e)}")
 
-    audio_data = io.BytesIO(response.content)
-    audio_data.name = "episode.mp3"
+# ── Background transcription task ────────────────────────────────────────────
 
+def _run_transcription(job_id: str):
+    db = SessionLocal()
+    temp_path = None
     try:
-        transcript_response = client.audio.transcriptions.create(
-            file=audio_data,
-            model="whisper-1",
-            response_format="verbose_json",
-            timestamp_granularities=["segment"]
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "downloading", "message": "Downloading audio…"}
+
+        print(f"[{job_id}] Downloading audio from {AUDIO_URL}")
+        response = requests.get(
+            AUDIO_URL,
+            verify=certifi.where(),
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=120,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+        response.raise_for_status()
 
-    transcript_segments = transcript_response.segments
-    transcript_json = json.dumps(transcript_segments)
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            tmp.write(response.content)
+            temp_path = tmp.name
+        print(f"[{job_id}] Downloaded {len(response.content)} bytes to {temp_path}")
+
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "transcribing", "message": "Transcribing with Whisper (this may take a few minutes)…"}
+
+        print(f"[{job_id}] Starting Whisper transcription…")
+        transcript_segments = transcribe_audio_local(temp_path)
+        print(f"[{job_id}] Transcription done: {len(transcript_segments)} segments")
+
+        transcript_json = json.dumps(transcript_segments)
+        episode = models.Episode(title="Podcast Episode", transcript=transcript_json)
+        db.add(episode)
+        db.commit()
+        db.refresh(episode)
+
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "done", "episode_id": episode.id, "message": "Transcript saved"}
+
+    except Exception as e:
+        print(f"[{job_id}] Failed: {e}")
+        with _jobs_lock:
+            _jobs[job_id] = {"status": "error", "message": str(e)}
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+        db.close()
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
+
+@router.get("/transcript-status")
+def transcript_status(db: Session = Depends(get_db)):
+    episode = db.query(models.Episode).order_by(models.Episode.id.desc()).first()
+    if not episode:
+        return {"has_transcript": False}
+    return {"has_transcript": True, "episode_id": episode.id, "title": episode.title}
+
+
+@router.post("/transcribe")
+def transcribe_episode(background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "starting", "message": "Starting…"}
+    background_tasks.add_task(_run_transcription, job_id)
+    return {"job_id": job_id}
+
+
+@router.get("/transcribe/status/{job_id}")
+def transcribe_status(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@router.post("/upload-transcript")
+def upload_transcript(transcript_data: dict, db: Session = Depends(get_db)):
+    transcript_json = json.dumps(transcript_data.get("segments", []))
 
     episode = models.Episode(title="Podcast Episode", transcript=transcript_json)
     db.add(episode)
     db.commit()
     db.refresh(episode)
 
-    return {"episode_id": episode.id, "message": "Transcription completed"}
-
-@router.post("/episodes")
-def create_episode(payload: dict, db: Session = Depends(get_db)):
-    title = payload.get("title", "Untitled Episode")
-    transcript = payload.get("transcript")
-
-    if not transcript:
-        raise HTTPException(status_code=422, detail="Episode transcript is required")
-
-    episode = models.Episode(title=title, transcript=transcript)
-    db.add(episode)
-    db.commit()
-    db.refresh(episode)
-
-    return {"episode_id": episode.id, "title": episode.title}
+    return {"episode_id": episode.id, "message": "Transcript uploaded successfully"}
 
 
 @router.get("/episodes/latest")
@@ -70,11 +123,22 @@ def latest_episode(db: Session = Depends(get_db)):
     episode = db.query(models.Episode).order_by(models.Episode.id.desc()).first()
     if not episode:
         raise HTTPException(status_code=404, detail="No episode found")
-
     return {
         "episode_id": episode.id,
         "title": episode.title,
         "transcript": episode.transcript,
+    }
+
+
+@router.get("/episodes/{episode_id}/notes")
+def get_episode_notes(episode_id: int, db: Session = Depends(get_db)):
+    notes = db.query(models.Note).filter(models.Note.episode_id == episode_id).all()
+    return {
+        "full_notes": next((n.content for n in notes if n.is_full), None),
+        "timestamp_notes": [
+            {"timestamp": n.timestamp, "content": n.content}
+            for n in notes if not n.is_full
+        ],
     }
 
 
@@ -92,13 +156,12 @@ def generate_note(request: dict, db: Session = Depends(get_db)):
             episode = db.query(models.Episode).order_by(models.Episode.id.desc()).first()
 
         if not episode or not episode.transcript:
-            raise HTTPException(status_code=400, detail="No transcript available")
+            raise HTTPException(status_code=400, detail="No transcript available. Please transcribe the episode first.")
 
         transcript_payload = episode.transcript
     else:
         episode = None
 
-    # normalize transcript payload to text and optionally segments
     transcript_segments = None
     transcript_text = None
 
@@ -106,17 +169,16 @@ def generate_note(request: dict, db: Session = Depends(get_db)):
         transcript_segments = transcript_payload
         transcript_text = " ".join([str(seg.get("text", "")) for seg in transcript_segments])
     elif isinstance(transcript_payload, str):
-        transcript_text = transcript_payload
-        # try to parse JSON list if serialized list is stored as text
         try:
-            import json
-
             parsed = json.loads(transcript_payload)
             if isinstance(parsed, list):
                 transcript_segments = parsed
-            # keep transcript_text as str, not losing the raw value
+                # Extract actual spoken text — not the raw JSON string
+                transcript_text = " ".join([str(seg.get("text", "")) for seg in transcript_segments])
+            else:
+                transcript_text = transcript_payload
         except Exception:
-            pass
+            transcript_text = transcript_payload
     else:
         raise HTTPException(status_code=422, detail="Invalid transcript payload")
 
@@ -125,10 +187,12 @@ def generate_note(request: dict, db: Session = Depends(get_db)):
     else:
         if transcript_segments and timestamp is not None:
             text = extract_chunk(transcript_segments=transcript_segments, timestamp=timestamp)
+            if not text.strip():
+                raise HTTPException(status_code=400, detail="No transcript content found near this timestamp.")
         else:
             text = f"[timestamp: {timestamp}]\n" + (transcript_text or "")
 
-    notes = generate_notes(text)
+    notes = generate_notes(text, full_episode=full_episode)
 
     note_record = models.Note(
         episode_id=episode.id if episode is not None else episode_id,
@@ -136,8 +200,16 @@ def generate_note(request: dict, db: Session = Depends(get_db)):
         timestamp=timestamp,
         is_full=full_episode,
     )
-
     db.add(note_record)
     db.commit()
 
     return {"notes": notes}
+
+
+@router.get("/debug")
+def debug_info():
+    return {
+        "groq_key_set": bool(os.getenv("GROQ_API_KEY")),
+        "groq_available": groq_client is not None,
+        "whisper_model": "faster-whisper base (local)",
+    }

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
+    <link href="style.css" rel="stylesheet">
+    <title>Podcast Note Taking</title>
+</head>
+<body>
+    <h1>Podcast Note Taking</h1>
+    <p>AI-powered notes for your podcast episodes.</p>
+
+    <audio id="player" controls>
+        <source src="https://pdst.fm/e/pscrb.fm/rss/p/mgln.ai/e/1390/claritaspod.com/measure/p.podderapp.com/2544644999/episode.flightcast.com/01KK9Q3P2XBKGST2RRVG9QPQA4.mp3" type="audio/mpeg">
+    </audio>
+
+    <div class="controls">
+        <div id="transcriptStatus" class="status-badge">Checking...</div>
+        <button id="transcribeBtn" onclick="transcribeEpisode(event)">Transcribe Episode</button>
+        <label class="file-label">
+            Upload Transcript JSON
+            <input type="file" id="transcriptFile" accept=".json" onchange="uploadTranscript(event)">
+        </label>
+    </div>
+
+    <div class="container">
+        <div class="left">
+            <h2>Full Episode Notes</h2>
+            <div id="fullNotes" class="notes-content">
+                <span class="placeholder">Click "Summarize Full Episode" to generate notes.</span>
+            </div>
+            <button onclick="fullEpisodeNotes(event)">Summarize Full Episode</button>
+        </div>
+
+        <div class="right">
+            <h2>Timestamp Notes</h2>
+            <ul id="timestampNotes"></ul>
+            <button id="takeNotesBtn" onclick="takeNotes(event)">Take Notes at Current Position</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

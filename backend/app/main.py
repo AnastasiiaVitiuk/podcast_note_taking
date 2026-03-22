@@ -1,3 +1,8 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env.local"))
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import router
